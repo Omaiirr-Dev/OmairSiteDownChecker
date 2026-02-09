@@ -1320,6 +1320,55 @@ app.post('/api/check', async (req, res) => {
   res.json({ results: out })
 })
 
+// Debug endpoint - see exactly what Puppeteer receives on this server
+app.get('/api/debug-puppeteer', async (req, res) => {
+  const url = req.query.url
+  if (!url) return res.status(400).json({ error: 'Missing ?url= parameter' })
+  if (!puppeteer) return res.status(503).json({ error: 'Puppeteer not available' })
+
+  let page = null
+  try {
+    const browser = await getBrowser()
+    page = await browser.newPage()
+    await page.setViewport({ width: 1280, height: 800 })
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
+
+    const allRequests = []
+    page.on('request', request => {
+      allRequests.push({ url: request.url(), type: request.resourceType(), isNav: request.isNavigationRequest() })
+    })
+
+    let navError = null
+    try {
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 })
+    } catch (e) {
+      navError = e.message
+      try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }) } catch (_) {}
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    const finalUrl = page.url()
+    const html = await page.content().catch(() => '')
+    await page.close()
+
+    const navRequests = allRequests.filter(r => r.isNav)
+
+    res.json({
+      inputUrl: url,
+      finalUrl,
+      urlChanged: url !== finalUrl,
+      navError,
+      navigationRequests: navRequests,
+      totalRequests: allRequests.length,
+      htmlLength: html.length,
+      htmlFirst3000: html.slice(0, 3000)
+    })
+  } catch (err) {
+    if (page) try { await page.close() } catch (_) {}
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
 })
