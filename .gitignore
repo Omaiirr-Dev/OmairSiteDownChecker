@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.*
+.env*.local
+
+# Vercel
+.vercel/
+
+# IDE / editor settings
+.claude/
+.cursor/
+.trae/
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="darkreader-lock" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Omairs Site Down Checker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="header">
+        <h1>Omairs Site Down Checker</h1>
+        <p>Detects Up, Down, Redirects, and Cloudflare blocks</p>
+      </header>
+
+      <section class="input-card">
+        <label for="urls">Enter one URL per line <span id="entered-count" class="count-green">0</span></label>
+        <textarea id="urls" placeholder="Paste in sites here" rows="8"></textarea>
+        <div class="actions">
+          <button id="checkBtn">Check Status</button>
+          <div class="checkbox-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="checkRedirectsGeo" checked />
+              <span>Check redirects & Cloudflare</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="tryAllVariations" />
+              <span>Try all 4 variations</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="detectUniqueRedirects" />
+              <span>Detect unique redirects</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="advancedRedirects" />
+              <span>Advanced Redirects (Longer)</span>
+            </label>
+            <label class="checkbox-label checkbox-label-disabled" id="puppeteerLabel">
+              <input type="checkbox" id="puppeteerScreenshot" disabled />
+              <span>Puppeteer (picture grab)</span>
+            </label>
+          </div>
+          <button id="clearBtn" class="clear-btn" title="Clear all results and reset">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              <line x1="10" y1="11" x2="10" y2="17"></line>
+              <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+          </button>
+        </div>
+        <div id="progress" class="progress" style="display: none;">
+          <svg class="spinner" width="18" height="18" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" opacity="0.25"/>
+            <path d="M12 2 A10 10 0 0 1 22 12" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/>
+          </svg>
+          <span id="progress-text">Checking…</span>
+        </div>
+        <div id="warning-container"></div>
+        <div id="notification-container"></div>
+      </section>
+
+      <section class="results-card">
+        <div class="legend">
+          <span class="chip chip-up">Up</span>
+          <span class="chip chip-redirect-up">Redirect Up</span>
+          <span class="chip chip-redirect-down">Redirect Down</span>
+          <span class="chip chip-unique-redirect">Unique Redirect</span>
+          <span class="chip chip-cf">Cloudflare</span>
+          <span class="chip chip-down">Down</span>
+          <span id="checked-count" class="count-green"></span>
+          <span id="time-taken" class="time-taken"></span>
+        </div>
+        <ul id="results" class="results"></ul>
+      </section>
+
+      <section class="tables-card">
+        <div class="tables-grid">
+          <div class="table-box" data-category="up">
+            <div class="table-head"><h2>Up</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="up" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="up">Copy List</button></div></div>
+            <table class="table" id="table-up"><tbody id="tbody-up"></tbody></table>
+          </div>
+          <div class="table-box" data-category="redirect_up">
+            <div class="table-head"><h2>Redirect Up</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="redirect_up" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="redirect_up">Copy List</button></div></div>
+            <table class="table" id="table-redirect_up"><tbody id="tbody-redirect_up"></tbody></table>
+          </div>
+          <div class="table-box" data-category="redirect_down">
+            <div class="table-head"><h2>Redirect Down</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="redirect_down" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="redirect_down">Copy List</button></div></div>
+            <table class="table" id="table-redirect_down"><tbody id="tbody-redirect_down"></tbody></table>
+          </div>
+          <div class="table-box" data-category="unique_redirect">
+            <div class="table-head"><h2>Unique Redirects</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="unique_redirect" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="unique_redirect">Copy List</button></div></div>
+            <table class="table" id="table-unique_redirect"><tbody id="tbody-unique_redirect"></tbody></table>
+          </div>
+          <div class="table-box" data-category="cloudflare_block">
+            <div class="table-head"><h2>Cloudflare</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="cloudflare_block" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="cloudflare_block">Copy List</button></div></div>
+            <table class="table" id="table-cloudflare_block"><tbody id="tbody-cloudflare_block"></tbody></table>
+          </div>
+          <div class="table-box" data-category="down">
+            <div class="table-head"><h2>Down</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="down" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="down">Copy List</button></div></div>
+            <table class="table" id="table-down"><tbody id="tbody-down"></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <section class="chart-card">
+        <div class="chart-head">
+          <h2>Status Breakdown</h2>
+          <div class="legend chart-legend">
+            <span class="chip chip-up">Up: <span id="count-up">0</span></span>
+            <span class="chip chip-redirect-up">Redirect Up: <span id="count-redirect_up">0</span></span>
+            <span class="chip chip-redirect-down">Redirect Down: <span id="count-redirect_down">0</span></span>
+            <span class="chip chip-unique-redirect">Unique: <span id="count-unique_redirect">0</span></span>
+            <span class="chip chip-cf">CF: <span id="count-cloudflare_block">0</span></span>
+            <span class="chip chip-down">Down: <span id="count-down">0</span></span>
+          </div>
+        </div>
+        <canvas id="chart" width="420" height="220"></canvas>
+      </section>
+    </div>
+
+    <!-- Screenshot Gallery Modal -->
+    <div id="screenshotModal" class="modal">
+      <div class="modal-overlay"></div>
+      <div class="modal-container screenshot-modal-container">
+        <button class="modal-close" aria-label="Close modal">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+        <div class="screenshot-modal-content">
+          <div class="screenshot-header">
+            <h2 id="screenshotModalTitle">Screenshots</h2>
+            <span id="screenshotCounter" class="screenshot-counter">1 / 10</span>
+          </div>
+          <div class="screenshot-viewer">
+            <div class="screenshot-nav-col">
+              <button class="screenshot-nav screenshot-nav-prev" id="screenshotPrev">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="15 18 9 12 15 6"></polyline>
+                </svg>
+              </button>
+              <button class="screenshot-down-btn" id="screenshotDownLeft" title="Move to Down">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                Down
+              </button>
+            </div>
+            <div class="screenshot-image-container">
+              <img id="screenshotImage" src="" alt="Screenshot" />
+            </div>
+            <div class="screenshot-nav-col">
+              <button class="screenshot-nav screenshot-nav-next" id="screenshotNext">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="9 18 15 12 9 6"></polyline>
+                </svg>
+              </button>
+              <button class="screenshot-down-btn" id="screenshotDownRight" title="Move to Down">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                Down
+              </button>
+            </div>
+          </div>
+          <div class="screenshot-url-row">
+            <span class="screenshot-url" id="screenshotUrl"></span>
+            <div class="screenshot-send-to">
+              <label>Send to:</label>
+              <select id="screenshotSendTo">
+                <option value="">-- Select --</option>
+                <option value="up">Up</option>
+                <option value="redirect_up">Redirect Up</option>
+                <option value="redirect_down">Redirect Down</option>
+                <option value="unique_redirect">Unique Redirect</option>
+                <option value="cloudflare_block">Cloudflare</option>
+                <option value="down">Down</option>
+              </select>
+              <button id="screenshotSendBtn" class="screenshot-send-btn">Move</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Warning Modal -->
+    <div id="warningModal" class="warning-modal">
+      <div class="warning-modal-box">
+        <div class="warning-icon">⚡</div>
+        <div class="warning-title">This will be slow</div>
+        <div class="warning-text">Puppeteer + 4 variations = 4 browser sessions per URL. Usually unnecessary.</div>
+        <div class="warning-buttons">
+          <button id="warningKeep" class="warning-btn warning-btn-secondary">Keep it</button>
+          <button id="warningDisable" class="warning-btn warning-btn-primary">Disable variations</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
