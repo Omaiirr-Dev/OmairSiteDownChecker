@@ -510,12 +510,21 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
       })
     }
 
-    // Wait a bit more for any delayed JS redirects
-    await new Promise(resolve => setTimeout(resolve, 1500))
+    // Wait for any delayed JS redirects
+    await new Promise(resolve => setTimeout(resolve, 2000))
 
     // Get the final URL after all redirects
-    const finalUrl = page.url()
-    console.log(`[PUPPETEER] Final URL after redirects: ${finalUrl}`)
+    let finalUrl = page.url()
+    console.log(`[PUPPETEER] URL after first wait: ${finalUrl}`)
+
+    // If URL hasn't changed, wait a bit more and check again (some redirects are slow)
+    const originalRootCheck = getRootDomain(url)
+    const firstCheckRoot = getRootDomain(finalUrl)
+    if (originalRootCheck === firstCheckRoot) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+      finalUrl = page.url()
+      console.log(`[PUPPETEER] URL after second wait: ${finalUrl}`)
+    }
 
     // Get page content for classification
     const bodySnippet = await page.content().then(c => c.slice(0, 8192)).catch(() => '')
