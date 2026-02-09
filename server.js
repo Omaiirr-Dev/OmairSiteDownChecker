@@ -493,21 +493,6 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
     // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
 
-    // Track cross-domain navigation requests at browser level
-    // This catches JS redirects even if they don't complete due to geo/IP differences
-    const crossDomainNavRequests = []
-    const originalRoot = getRootDomain(url)
-    page.on('request', request => {
-      if (request.isNavigationRequest()) {
-        const reqUrl = request.url()
-        const reqDomain = getRootDomain(reqUrl)
-        if (reqDomain && originalRoot && reqDomain !== originalRoot) {
-          console.log(`[PUPPETEER] Intercepted cross-domain navigation request: ${reqUrl}`)
-          crossDomainNavRequests.push(reqUrl)
-        }
-      }
-    })
-
     // Navigate and wait for network to be idle (catches JS/JSON redirects)
     console.log(`[PUPPETEER] Navigating to ${url}`)
 
@@ -541,10 +526,8 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
       console.log(`[PUPPETEER] URL after second wait: ${finalUrl}`)
     }
 
-    console.log(`[PUPPETEER] Cross-domain nav requests captured: ${JSON.stringify(crossDomainNavRequests)}`)
-
     // Get page content for classification
-    const bodySnippet = await page.content().then(c => c.slice(0, 16384)).catch(() => '')
+    const bodySnippet = await page.content().then(c => c.slice(0, 8192)).catch(() => '')
 
     // Scrape text if enabled
     let scrapedText = null
@@ -617,40 +600,27 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
       reason = `JS/Meta redirect to ${finalRootDomain} (via Puppeteer)`
     }
 
-    // FALLBACK: If browser didn't redirect, use multiple methods to detect redirects
+    // FALLBACK: If browser didn't redirect, scan HTML for JS/meta redirect patterns
+    // This catches cases where the server/geo blocks the redirect in-browser
     let detectedRedirectUrl = isCrossDomainRedirect ? finalUrl : null
     if (!isCrossDomainRedirect && category === 'up') {
-      console.log(`[PUPPETEER] No URL change detected, using fallback redirect detection...`)
-
-      // METHOD 1: Check intercepted cross-domain navigation requests
-      // This is the most reliable - catches redirects at the browser request level
-      if (crossDomainNavRequests.length > 0) {
-        detectedRedirectUrl = crossDomainNavRequests[crossDomainNavRequests.length - 1]
-        const rDomain = getRootDomain(detectedRedirectUrl)
-        category = 'redirect_up'
-        reason = `JS/Meta redirect to ${rDomain} (via Puppeteer)`
-        console.log(`[PUPPETEER] Detected redirect via intercepted nav request: ${detectedRedirectUrl}`)
-      }
-
-      // METHOD 2: Scan HTML for meta refresh patterns
-      if (!detectedRedirectUrl) {
-        const metaMatch = bodySnippet.match(/<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']?\d+\s*;\s*url\s*=\s*["']?([^"'\s>]+)/i)
-        if (metaMatch && metaMatch[1]) {
-          let rUrl = metaMatch[1].replace(/["']/g, '')
-          if (!rUrl.startsWith('http')) {
-            try { const b = new URL(url); rUrl = rUrl.startsWith('/') ? `${b.protocol}//${b.host}${rUrl}` : `${b.protocol}//${b.host}/${rUrl}` } catch (_) {}
-          }
-          const rDomain = getRootDomain(rUrl)
-          if (rDomain !== originalRootDomain) {
-            detectedRedirectUrl = rUrl
-            category = 'redirect_up'
-            reason = `Meta refresh redirect to ${rDomain} (via Puppeteer)`
-            console.log(`[PUPPETEER] Found meta refresh redirect in HTML: ${rUrl}`)
-          }
+      console.log(`[PUPPETEER] No URL change detected, scanning HTML for redirect patterns...`)
+      // Check for meta refresh
+      const metaMatch = bodySnippet.match(/<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']?\d+\s*;\s*url\s*=\s*["']?([^"'\s>]+)/i)
+      if (metaMatch && metaMatch[1]) {
+        let rUrl = metaMatch[1].replace(/["']/g, '')
+        if (!rUrl.startsWith('http')) {
+          try { const b = new URL(url); rUrl = rUrl.startsWith('/') ? `${b.protocol}//${b.host}${rUrl}` : `${b.protocol}//${b.host}/${rUrl}` } catch (_) {}
+        }
+        const rDomain = getRootDomain(rUrl)
+        if (rDomain !== originalRootDomain) {
+          detectedRedirectUrl = rUrl
+          category = 'redirect_up'
+          reason = `Meta refresh redirect to ${rDomain} (via Puppeteer)`
+          console.log(`[PUPPETEER] Found meta refresh redirect in HTML: ${rUrl}`)
         }
       }
-
-      // METHOD 3: Scan HTML for JS redirect patterns (direct string assignments)
+      // Check for JS redirects (window.location, etc.)
       if (!detectedRedirectUrl) {
         const jsPatterns = [
           /window\.location\s*=\s*["']([^"']+)["']/i,
@@ -659,11 +629,7 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
           /location\.href\s*=\s*["']([^"']+)["']/i,
           /location\.replace\s*\(\s*["']([^"']+)["']\s*\)/i,
           /document\.location\s*=\s*["']([^"']+)["']/i,
-          /document\.location\.href\s*=\s*["']([^"']+)["']/i,
-          /top\.location\s*=\s*["']([^"']+)["']/i,
-          /top\.location\.href\s*=\s*["']([^"']+)["']/i,
-          /self\.location\s*=\s*["']([^"']+)["']/i,
-          /self\.location\.href\s*=\s*["']([^"']+)["']/i
+          /document\.location\.href\s*=\s*["']([^"']+)["']/i
         ]
         for (const pat of jsPatterns) {
           const m = bodySnippet.match(pat)
@@ -682,32 +648,6 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
             }
           }
         }
-      }
-
-      // METHOD 4: Scan for JS redirects using variables (var url = "..."; window.location = url)
-      if (!detectedRedirectUrl) {
-        // Look for URLs assigned to variables near location assignments
-        const urlVarPatterns = [
-          /(?:var|let|const)\s+\w+\s*=\s*["'](https?:\/\/[^"']+)["'][\s\S]{0,200}(?:window\.)?location(?:\.href)?\s*=/i,
-          /["'](https?:\/\/[^"']+)["'][\s\S]{0,100}(?:window\.)?location(?:\.href)?\s*=/i
-        ]
-        for (const pat of urlVarPatterns) {
-          const m = bodySnippet.match(pat)
-          if (m && m[1]) {
-            const rDomain = getRootDomain(m[1])
-            if (rDomain !== originalRootDomain) {
-              detectedRedirectUrl = m[1]
-              category = 'redirect_up'
-              reason = `JS redirect to ${rDomain} (via Puppeteer)`
-              console.log(`[PUPPETEER] Found JS variable redirect in HTML: ${m[1]}`)
-              break
-            }
-          }
-        }
-      }
-
-      if (!detectedRedirectUrl) {
-        console.log(`[PUPPETEER] No redirect found in HTML. First 500 chars: ${bodySnippet.substring(0, 500)}`)
       }
     }
 
@@ -1378,52 +1318,6 @@ app.post('/api/check', async (req, res) => {
   }
 
   res.json({ results: out })
-})
-
-// Debug endpoint - see what Puppeteer sees on this server for a given URL
-app.get('/api/debug-puppeteer', async (req, res) => {
-  const url = req.query.url
-  if (!url) return res.status(400).json({ error: 'Missing ?url= parameter' })
-  if (!puppeteer) return res.status(503).json({ error: 'Puppeteer not available' })
-
-  let page = null
-  try {
-    const browser = await getBrowser()
-    page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 800 })
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
-
-    const navRequests = []
-    page.on('request', request => {
-      if (request.isNavigationRequest()) {
-        navRequests.push(request.url())
-      }
-    })
-
-    try {
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 })
-    } catch (_) {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 })
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 3000))
-    const finalUrl = page.url()
-    const html = await page.content().catch(() => '')
-    await page.close()
-
-    res.json({
-      inputUrl: url,
-      finalUrl,
-      urlChanged: url !== finalUrl,
-      navigationRequests: navRequests,
-      htmlLength: html.length,
-      htmlFirst2000: html.slice(0, 2000),
-      htmlLast1000: html.slice(-1000)
-    })
-  } catch (err) {
-    if (page) try { await page.close() } catch (_) {}
-    res.status(500).json({ error: err.message })
-  }
 })
 
 app.listen(PORT, () => {
