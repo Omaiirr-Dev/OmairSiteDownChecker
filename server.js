@@ -599,16 +599,67 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
       category = 'redirect_up'
       reason = `JS/Meta redirect to ${finalRootDomain} (via Puppeteer)`
     }
-    // If same domain but URL changed (e.g., google.com → google.com/home), keep as UP
-    // No change needed - category stays 'up'
+
+    // FALLBACK: If browser didn't redirect, scan HTML for JS/meta redirect patterns
+    // This catches cases where the server/geo blocks the redirect in-browser
+    let detectedRedirectUrl = isCrossDomainRedirect ? finalUrl : null
+    if (!isCrossDomainRedirect && category === 'up') {
+      console.log(`[PUPPETEER] No URL change detected, scanning HTML for redirect patterns...`)
+      // Check for meta refresh
+      const metaMatch = bodySnippet.match(/<meta[^>]*http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']?\d+\s*;\s*url\s*=\s*["']?([^"'\s>]+)/i)
+      if (metaMatch && metaMatch[1]) {
+        let rUrl = metaMatch[1].replace(/["']/g, '')
+        if (!rUrl.startsWith('http')) {
+          try { const b = new URL(url); rUrl = rUrl.startsWith('/') ? `${b.protocol}//${b.host}${rUrl}` : `${b.protocol}//${b.host}/${rUrl}` } catch (_) {}
+        }
+        const rDomain = getRootDomain(rUrl)
+        if (rDomain !== originalRootDomain) {
+          detectedRedirectUrl = rUrl
+          category = 'redirect_up'
+          reason = `Meta refresh redirect to ${rDomain} (via Puppeteer)`
+          console.log(`[PUPPETEER] Found meta refresh redirect in HTML: ${rUrl}`)
+        }
+      }
+      // Check for JS redirects (window.location, etc.)
+      if (!detectedRedirectUrl) {
+        const jsPatterns = [
+          /window\.location\s*=\s*["']([^"']+)["']/i,
+          /window\.location\.href\s*=\s*["']([^"']+)["']/i,
+          /window\.location\.replace\s*\(\s*["']([^"']+)["']\s*\)/i,
+          /location\.href\s*=\s*["']([^"']+)["']/i,
+          /location\.replace\s*\(\s*["']([^"']+)["']\s*\)/i,
+          /document\.location\s*=\s*["']([^"']+)["']/i,
+          /document\.location\.href\s*=\s*["']([^"']+)["']/i
+        ]
+        for (const pat of jsPatterns) {
+          const m = bodySnippet.match(pat)
+          if (m && m[1] && !m[1].startsWith('#') && !m[1].startsWith('javascript:')) {
+            let rUrl = m[1]
+            if (!rUrl.startsWith('http')) {
+              try { const b = new URL(url); rUrl = rUrl.startsWith('/') ? `${b.protocol}//${b.host}${rUrl}` : `${b.protocol}//${b.host}/${rUrl}` } catch (_) {}
+            }
+            const rDomain = getRootDomain(rUrl)
+            if (rDomain !== originalRootDomain) {
+              detectedRedirectUrl = rUrl
+              category = 'redirect_up'
+              reason = `JS redirect to ${rDomain} (via Puppeteer)`
+              console.log(`[PUPPETEER] Found JS redirect in HTML: ${rUrl}`)
+              break
+            }
+          }
+        }
+      }
+    }
+
+    const effectiveCrossDomain = isCrossDomainRedirect || !!detectedRedirectUrl
 
     // Check for unique redirect - only for cross-domain redirects
     console.log(`[PUPPETEER] About to check unique redirect:`)
-    console.log(`[PUPPETEER]   isCrossDomainRedirect = ${isCrossDomainRedirect}`)
-    console.log(`[PUPPETEER]   finalUrl = ${finalUrl}`)
+    console.log(`[PUPPETEER]   isCrossDomainRedirect = ${effectiveCrossDomain}`)
+    console.log(`[PUPPETEER]   redirectUrl = ${detectedRedirectUrl}`)
     console.log(`[PUPPETEER]   originalUrls length = ${originalUrls?.length}`)
     console.log(`[PUPPETEER]   detectUniqueRedirects = ${detectUniqueRedirects}`)
-    const isUnique = isCrossDomainRedirect ? isUniqueRedirect(finalUrl, url, originalUrls, detectUniqueRedirects) : false
+    const isUnique = effectiveCrossDomain ? isUniqueRedirect(detectedRedirectUrl || finalUrl, url, originalUrls, detectUniqueRedirects) : false
     console.log(`[PUPPETEER]   isUnique result = ${isUnique}`)
 
     await page.close()
@@ -618,8 +669,8 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
       httpStatus: 200,
       category,
       reason,
-      redirectTo: isCrossDomainRedirect ? finalUrl : null,
-      finalDestination: isCrossDomainRedirect ? finalUrl : null,
+      redirectTo: detectedRedirectUrl,
+      finalDestination: detectedRedirectUrl,
       scrapedText,
       screenshot,
       isUniqueRedirect: isUnique,
