@@ -512,29 +512,18 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
       timeout: 15000
     }).catch(() => {})
 
-    // Smart wait: watch for navigation (JS redirect) with short timeout
+    // Short wait for any JS redirects to fire
+    await new Promise(resolve => setTimeout(resolve, 1000))
     let finalUrl = page.url()
-    try {
-      await page.waitForNavigation({ timeout: 1500, waitUntil: 'domcontentloaded' })
-      finalUrl = page.url()
-      console.log(`[PUPPETEER] URL after nav wait: ${finalUrl}`)
-    } catch (_) {
-      // No navigation happened within 1.5s - that's fine
-      finalUrl = page.url()
-      console.log(`[PUPPETEER] No redirect detected after 1.5s, URL: ${finalUrl}`)
-    }
+    console.log(`[PUPPETEER] URL after 1s wait: ${finalUrl}`)
 
-    // If URL hasn't changed to a different domain, try one more short wait
+    // If URL hasn't changed to a different domain, one more short wait
     const originalRootCheck = getRootDomain(url)
     const firstCheckRoot = getRootDomain(finalUrl)
     if (originalRootCheck === firstCheckRoot) {
-      try {
-        await page.waitForNavigation({ timeout: 500, waitUntil: 'domcontentloaded' })
-        finalUrl = page.url()
-        console.log(`[PUPPETEER] URL after second nav wait: ${finalUrl}`)
-      } catch (_) {
-        finalUrl = page.url()
-      }
+      await new Promise(resolve => setTimeout(resolve, 500))
+      finalUrl = page.url()
+      console.log(`[PUPPETEER] URL after second wait: ${finalUrl}`)
     }
 
     // Get page content for classification
