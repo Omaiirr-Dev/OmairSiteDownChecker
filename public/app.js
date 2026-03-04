@@ -371,7 +371,7 @@ async function check() {
   screenshotsByUrl = {} // Reset URL-keyed screenshots
 
   const isAdvancedMode = advancedRedirectsEl && advancedRedirectsEl.checked
-  const BATCH_SIZE = isAdvancedMode ? 1 : 5 // 1 at a time for Puppeteer, 5 for normal
+  const BATCH_SIZE = isAdvancedMode ? 20 : 5 // 20 concurrent for Puppeteer, 5 for normal
   const totalUrls = urls.length
   const allResults = []
   const progressText = el('#progress-text')
@@ -384,11 +384,7 @@ async function check() {
 
       // Update progress text
       if (progressText) {
-        if (isAdvancedMode) {
-          progressText.textContent = `Puppeteer checking ${i + 1} / ${totalUrls}...`
-        } else {
-          progressText.textContent = `Checking ${i + 1}-${endIndex} / ${totalUrls}...`
-        }
+        progressText.textContent = `${isAdvancedMode ? 'Puppeteer checking' : 'Checking'} ${i + 1}-${endIndex} / ${totalUrls}...`
       }
 
       const res = await fetch('/api/check', {

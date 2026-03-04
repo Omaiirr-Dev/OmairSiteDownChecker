@@ -487,43 +487,54 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
     page = await browser.newPage()
     console.log(`[PUPPETEER] Created new page`)
 
-    // Set viewport for consistent screenshots
-    await page.setViewport({ width: 1280, height: 800 })
+    // Block unnecessary resources to save CPU/RAM/bandwidth
+    await page.setRequestInterception(true)
+    page.on('request', (req) => {
+      const type = req.resourceType()
+      if (['image', 'stylesheet', 'font', 'media', 'other'].includes(type) && !takeScreenshot) {
+        req.abort()
+      } else {
+        req.continue()
+      }
+    })
+
+    // Smaller viewport when not taking screenshots
+    await page.setViewport(takeScreenshot ? { width: 1280, height: 800 } : { width: 800, height: 600 })
 
     // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
 
-    // Navigate and wait for network to be idle (catches JS/JSON redirects)
+    // Navigate with domcontentloaded (faster, sufficient for redirect detection)
     console.log(`[PUPPETEER] Navigating to ${url}`)
 
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000
+    }).catch(() => {})
+
+    // Smart wait: watch for navigation (JS redirect) with short timeout
+    let finalUrl = page.url()
     try {
-      await page.goto(url, {
-        waitUntil: 'networkidle2',
-        timeout: 30000
-      })
-    } catch (navErr) {
-      console.log(`[PUPPETEER] Navigation error, trying with domcontentloaded: ${navErr.message}`)
-      // Retry with less strict wait condition
-      await page.goto(url, {
-        waitUntil: 'domcontentloaded',
-        timeout: 30000
-      })
+      await page.waitForNavigation({ timeout: 1500, waitUntil: 'domcontentloaded' })
+      finalUrl = page.url()
+      console.log(`[PUPPETEER] URL after nav wait: ${finalUrl}`)
+    } catch (_) {
+      // No navigation happened within 1.5s - that's fine
+      finalUrl = page.url()
+      console.log(`[PUPPETEER] No redirect detected after 1.5s, URL: ${finalUrl}`)
     }
 
-    // Wait for any delayed JS redirects
-    await new Promise(resolve => setTimeout(resolve, 2000))
-
-    // Get the final URL after all redirects
-    let finalUrl = page.url()
-    console.log(`[PUPPETEER] URL after first wait: ${finalUrl}`)
-
-    // If URL hasn't changed, wait a bit more and check again (some redirects are slow)
+    // If URL hasn't changed to a different domain, try one more short wait
     const originalRootCheck = getRootDomain(url)
     const firstCheckRoot = getRootDomain(finalUrl)
     if (originalRootCheck === firstCheckRoot) {
-      await new Promise(resolve => setTimeout(resolve, 2000))
-      finalUrl = page.url()
-      console.log(`[PUPPETEER] URL after second wait: ${finalUrl}`)
+      try {
+        await page.waitForNavigation({ timeout: 500, waitUntil: 'domcontentloaded' })
+        finalUrl = page.url()
+        console.log(`[PUPPETEER] URL after second nav wait: ${finalUrl}`)
+      } catch (_) {
+        finalUrl = page.url()
+      }
     }
 
     // Get page content for classification
@@ -1229,62 +1240,52 @@ app.post('/api/check', async (req, res) => {
   const allUrls = Array.isArray(req.body.allUrls) ? req.body.allUrls : urls
   const allNormalized = allUrls.map(normalizeUrl).filter(Boolean)
 
-  // Use smaller batch size for Puppeteer (more resource intensive)
-  const limit = advancedRedirects ? 2 : 5
+  // Concurrency: 20 for Puppeteer, 5 for normal
+  const limit = advancedRedirects ? 20 : 5
   const out = []
 
-  if (advancedRedirects && tryAllVariations) {
-    // Puppeteer + 4 variations mode
-    console.log(`[API] Using Puppeteer + 4 Variations mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs`)
-    for (let i = 0; i < normalized.length; i++) {
-      const url = normalized[i]
-      console.log(`[API] Puppeteer+Variations checking ${i + 1}/${normalized.length}: ${url}`)
-      try {
-        const result = await checkWithPuppeteerVariations(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects)
-        out.push(result)
-        console.log(`[API] Puppeteer+Variations result for ${url}: ${result.category}`)
-      } catch (err) {
-        console.log(`[API] Puppeteer+Variations failed for ${url}: ${err.message}`)
-        out.push({
-          url,
-          httpStatus: 0,
-          category: 'down',
-          reason: `Puppeteer error: ${err.message}`,
-          redirectTo: null,
-          scrapedText: null,
-          screenshot: null,
-          isUniqueRedirect: false,
-          timeMs: 0
-        })
+  // Helper: safely run a Puppeteer check with error handling
+  const safePuppeteerCheck = async (url, fn) => {
+    try {
+      return await fn()
+    } catch (err) {
+      console.log(`[API] Puppeteer failed for ${url}: ${err.message}`)
+      return {
+        url,
+        httpStatus: 0,
+        category: 'down',
+        reason: `Puppeteer error: ${err.message}`,
+        redirectTo: null,
+        scrapedText: null,
+        screenshot: null,
+        isUniqueRedirect: false,
+        timeMs: 0
       }
     }
+  }
+
+  if (advancedRedirects && tryAllVariations) {
+    // Puppeteer + 4 variations mode — process in batches of `limit`
+    console.log(`[API] Using Puppeteer + 4 Variations mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs, concurrency: ${limit}`)
+    for (let i = 0; i < normalized.length; i += limit) {
+      const batch = normalized.slice(i, i + limit)
+      console.log(`[API] Puppeteer+Variations batch ${i + 1}-${i + batch.length}/${normalized.length}`)
+      const results = await Promise.all(batch.map(url =>
+        safePuppeteerCheck(url, () => checkWithPuppeteerVariations(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects))
+      ))
+      out.push(...results)
+    }
   } else if (advancedRedirects) {
-    // Use Puppeteer for advanced redirect following (JS/JSON redirects)
-    // Process ONE at a time to avoid browser resource issues
-    console.log(`[API] Using Puppeteer mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs`)
+    // Puppeteer mode — process in batches of `limit` (default 20 concurrent)
+    console.log(`[API] Using Puppeteer mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs, concurrency: ${limit}`)
     console.log(`[API] detectUniqueRedirects = ${detectUniqueRedirects}`)
-    console.log(`[API] Full URL list being passed:`, allNormalized)
-    for (let i = 0; i < normalized.length; i++) {
-      const url = normalized[i]
-      console.log(`[API] Puppeteer checking ${i + 1}/${normalized.length}: ${url}`)
-      try {
-        const result = await checkWithPuppeteer(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects)
-        out.push(result)
-        console.log(`[API] Puppeteer result for ${url}: ${result.category}`)
-      } catch (err) {
-        console.log(`[API] Puppeteer failed for ${url}: ${err.message}`)
-        out.push({
-          url,
-          httpStatus: 0,
-          category: 'down',
-          reason: `Puppeteer error: ${err.message}`,
-          redirectTo: null,
-          scrapedText: null,
-          screenshot: null,
-          isUniqueRedirect: false,
-          timeMs: 0
-        })
-      }
+    for (let i = 0; i < normalized.length; i += limit) {
+      const batch = normalized.slice(i, i + limit)
+      console.log(`[API] Puppeteer batch ${i + 1}-${i + batch.length}/${normalized.length}`)
+      const results = await Promise.all(batch.map(url =>
+        safePuppeteerCheck(url, () => checkWithPuppeteer(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects))
+      ))
+      out.push(...results)
     }
   } else if (tryAllVariations) {
     // Check all variations for each URL
