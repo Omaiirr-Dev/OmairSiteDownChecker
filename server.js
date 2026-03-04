@@ -3,6 +3,7 @@ const path = require('path')
 const fetch = require('node-fetch')
 const https = require('https')
 const puppeteer = require('puppeteer')
+const { Cluster } = require('puppeteer-cluster')
 
 // HTTPS agent that ignores SSL certificate errors
 const httpsAgent = new https.Agent({
@@ -11,48 +12,55 @@ const httpsAgent = new https.Agent({
 
 const app = express()
 
-// Browser instance for Puppeteer (reused across requests)
-let browserInstance = null
+// Puppeteer cluster instance (lazy-initialized, reused across requests)
+let cluster = null
 
-async function getBrowser() {
-  // Check if existing browser is still connected
-  if (browserInstance && browserInstance.isConnected()) {
-    return browserInstance
-  }
+const PUPPETEER_CONCURRENCY = parseInt(process.env.PUPPETEER_CONCURRENCY, 10) || 10
 
-  // Close old instance if disconnected
-  if (browserInstance) {
-    try { await browserInstance.close() } catch (_) {}
-    browserInstance = null
-  }
+async function getCluster() {
+  if (cluster) return cluster
 
-  console.log('[PUPPETEER] Launching new browser...')
-  browserInstance = await puppeteer.launch({
-    headless: 'new', // Use new headless mode
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--disable-web-security',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--ignore-certificate-errors',
-      '--ignore-certificate-errors-spki-list'
-    ]
+  console.log(`[CLUSTER] Launching puppeteer-cluster with ${PUPPETEER_CONCURRENCY} concurrent workers...`)
+  cluster = await Cluster.launch({
+    concurrency: Cluster.CONCURRENCY_PAGE, // One browser, multiple tabs
+    maxConcurrency: PUPPETEER_CONCURRENCY,
+    puppeteerOptions: {
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--ignore-certificate-errors',
+        '--ignore-certificate-errors-spki-list',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-translate',
+        '--metrics-recording-only',
+        '--mute-audio',
+        '--no-first-run'
+      ]
+    },
+    retryLimit: 1,
+    timeout: 20000, // Per-task timeout
+    monitor: false
   })
-  console.log('[PUPPETEER] Browser launched successfully')
-  return browserInstance
+  console.log(`[CLUSTER] Cluster launched with ${PUPPETEER_CONCURRENCY} workers`)
+  return cluster
 }
 
-// Cleanup browser on exit
+// Cleanup cluster on exit
 process.on('exit', async () => {
-  if (browserInstance) {
-    try { await browserInstance.close() } catch (_) {}
+  if (cluster) {
+    try { await cluster.close() } catch (_) {}
   }
 })
 process.on('SIGINT', async () => {
-  if (browserInstance) {
-    try { await browserInstance.close() } catch (_) {}
+  if (cluster) {
+    try { await cluster.close() } catch (_) {}
   }
   process.exit()
 })
@@ -469,9 +477,10 @@ async function checkExternalJsForRedirects(html, baseUrl, headers) {
   return { isParked: false }
 }
 
-async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = false, originalUrls = [], detectUniqueRedirects = false) {
+async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = false, originalUrls = [], detectUniqueRedirects = false, clusterPage = null) {
   const started = Date.now()
-  let page = null
+  let page = clusterPage
+  let ownPage = false
 
   console.log(`[PUPPETEER] ====== RECEIVED PARAMS ======`)
   console.log(`[PUPPETEER] url = ${url}`)
@@ -481,47 +490,64 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
 
   try {
     console.log(`[PUPPETEER] Starting check for ${url}`)
-    const browser = await getBrowser()
-    console.log(`[PUPPETEER] Got browser instance`)
 
-    page = await browser.newPage()
-    console.log(`[PUPPETEER] Created new page`)
+    // If no page provided by cluster, create one manually (fallback)
+    if (!page) {
+      const cl = await getCluster()
+      const browser = await cl.browser
+      page = await browser.newPage()
+      ownPage = true
+      console.log(`[PUPPETEER] Created new page (fallback)`)
+    }
 
-    // Block unnecessary resources to save CPU/RAM/bandwidth
-    await page.setRequestInterception(true)
-    page.on('request', (req) => {
-      const type = req.resourceType()
-      if (['image', 'stylesheet', 'font', 'media', 'other'].includes(type) && !takeScreenshot) {
-        req.abort()
-      } else {
-        req.continue()
-      }
-    })
-
-    // Smaller viewport when not taking screenshots
-    await page.setViewport(takeScreenshot ? { width: 1280, height: 800 } : { width: 800, height: 600 })
+    // Set viewport for consistent screenshots
+    await page.setViewport({ width: 1280, height: 800 })
 
     // Set user agent
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
 
-    // Navigate with domcontentloaded (faster, sufficient for redirect detection)
+    // Block images, fonts, stylesheets, and media to save bandwidth and speed up checks
+    if (!takeScreenshot) {
+      await page.setRequestInterception(true)
+      page.on('request', (req) => {
+        const resourceType = req.resourceType()
+        if (['image', 'font', 'stylesheet', 'media'].includes(resourceType)) {
+          req.abort()
+        } else {
+          req.continue()
+        }
+      })
+    }
+
+    // Navigate and wait for network to be idle (catches JS/JSON redirects)
     console.log(`[PUPPETEER] Navigating to ${url}`)
 
-    await page.goto(url, {
-      waitUntil: 'domcontentloaded',
-      timeout: 15000
-    }).catch(() => {})
+    try {
+      await page.goto(url, {
+        waitUntil: 'networkidle2',
+        timeout: 15000
+      })
+    } catch (navErr) {
+      console.log(`[PUPPETEER] Navigation error, trying with domcontentloaded: ${navErr.message}`)
+      // Retry with less strict wait condition
+      await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000
+      })
+    }
 
-    // Short wait for any JS redirects to fire
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // Wait for any delayed JS redirects
+    await new Promise(resolve => setTimeout(resolve, 2000))
+
+    // Get the final URL after all redirects
     let finalUrl = page.url()
-    console.log(`[PUPPETEER] URL after 1s wait: ${finalUrl}`)
+    console.log(`[PUPPETEER] URL after first wait: ${finalUrl}`)
 
-    // If URL hasn't changed to a different domain, one more short wait
+    // If URL hasn't changed, wait a bit more and check again (some redirects are slow)
     const originalRootCheck = getRootDomain(url)
     const firstCheckRoot = getRootDomain(finalUrl)
     if (originalRootCheck === firstCheckRoot) {
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise(resolve => setTimeout(resolve, 2000))
       finalUrl = page.url()
       console.log(`[PUPPETEER] URL after second wait: ${finalUrl}`)
     }
@@ -662,7 +688,7 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
     const isUnique = effectiveCrossDomain ? isUniqueRedirect(detectedRedirectUrl || finalUrl, url, originalUrls, detectUniqueRedirects) : false
     console.log(`[PUPPETEER]   isUnique result = ${isUnique}`)
 
-    await page.close()
+    if (ownPage) await page.close()
 
     return {
       url,
@@ -681,14 +707,14 @@ async function checkWithPuppeteer(url, takeScreenshot = false, scrapeText = fals
     console.log(`[PUPPETEER] Error checking ${url}: ${err.message}`)
     console.log(`[PUPPETEER] Error stack: ${err.stack}`)
 
-    if (page) {
+    if (ownPage && page) {
       try { await page.close() } catch (_) {}
     }
 
-    // If browser crashed, clear the instance so it can be recreated
+    // If browser crashed, clear the cluster so it can be recreated
     if (err.message.includes('Target closed') || err.message.includes('Session closed') || err.message.includes('Protocol error')) {
-      console.log('[PUPPETEER] Browser appears crashed, clearing instance')
-      browserInstance = null
+      console.log('[PUPPETEER] Browser appears crashed, clearing cluster instance')
+      cluster = null
     }
 
     return {
@@ -1229,53 +1255,81 @@ app.post('/api/check', async (req, res) => {
   const allUrls = Array.isArray(req.body.allUrls) ? req.body.allUrls : urls
   const allNormalized = allUrls.map(normalizeUrl).filter(Boolean)
 
-  // Concurrency: 20 for Puppeteer, 5 for normal
-  const limit = advancedRedirects ? 20 : 5
+  const limit = advancedRedirects ? PUPPETEER_CONCURRENCY : 5
   const out = []
 
-  // Helper: safely run a Puppeteer check with error handling
-  const safePuppeteerCheck = async (url, fn) => {
-    try {
-      return await fn()
-    } catch (err) {
-      console.log(`[API] Puppeteer failed for ${url}: ${err.message}`)
-      return {
-        url,
-        httpStatus: 0,
-        category: 'down',
-        reason: `Puppeteer error: ${err.message}`,
-        redirectTo: null,
-        scrapedText: null,
-        screenshot: null,
-        isUniqueRedirect: false,
-        timeMs: 0
-      }
-    }
-  }
-
   if (advancedRedirects && tryAllVariations) {
-    // Puppeteer + 4 variations mode — process in batches of `limit`
-    console.log(`[API] Using Puppeteer + 4 Variations mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs, concurrency: ${limit}`)
-    for (let i = 0; i < normalized.length; i += limit) {
-      const batch = normalized.slice(i, i + limit)
-      console.log(`[API] Puppeteer+Variations batch ${i + 1}-${i + batch.length}/${normalized.length}`)
-      const results = await Promise.all(batch.map(url =>
-        safePuppeteerCheck(url, () => checkWithPuppeteerVariations(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects))
-      ))
+    // Puppeteer + 4 variations mode — run concurrently via cluster
+    // Each URL spawns 4 variation checks, all managed by the cluster
+    console.log(`[API] Using Puppeteer + 4 Variations mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs (concurrency: ${PUPPETEER_CONCURRENCY})`)
+    await getCluster() // Ensure cluster is initialized
+
+    // Process URLs concurrently using Promise.all with batching
+    // checkWithPuppeteerVariations internally calls checkWithPuppeteer which creates its own pages
+    for (let i = 0; i < normalized.length; i += PUPPETEER_CONCURRENCY) {
+      const batch = normalized.slice(i, i + PUPPETEER_CONCURRENCY)
+      const results = await Promise.all(batch.map(async (url, j) => {
+        console.log(`[API] Puppeteer+Variations checking ${i + j + 1}/${normalized.length}: ${url}`)
+        try {
+          const result = await checkWithPuppeteerVariations(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects)
+          console.log(`[API] Puppeteer+Variations result for ${url}: ${result.category}`)
+          return result
+        } catch (err) {
+          console.log(`[API] Puppeteer+Variations failed for ${url}: ${err.message}`)
+          return {
+            url,
+            httpStatus: 0,
+            category: 'down',
+            reason: `Puppeteer error: ${err.message}`,
+            redirectTo: null,
+            scrapedText: null,
+            screenshot: null,
+            isUniqueRedirect: false,
+            timeMs: 0
+          }
+        }
+      }))
       out.push(...results)
     }
+
   } else if (advancedRedirects) {
-    // Puppeteer mode — process in batches of `limit` (default 20 concurrent)
-    console.log(`[API] Using Puppeteer mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs, concurrency: ${limit}`)
+    // Puppeteer mode — run concurrently via cluster (10 tabs at once)
+    console.log(`[API] Using Puppeteer mode (screenshot: ${puppeteerScreenshot}) for ${normalized.length} URLs (concurrency: ${PUPPETEER_CONCURRENCY})`)
     console.log(`[API] detectUniqueRedirects = ${detectUniqueRedirects}`)
-    for (let i = 0; i < normalized.length; i += limit) {
-      const batch = normalized.slice(i, i + limit)
-      console.log(`[API] Puppeteer batch ${i + 1}-${i + batch.length}/${normalized.length}`)
-      const results = await Promise.all(batch.map(url =>
-        safePuppeteerCheck(url, () => checkWithPuppeteer(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects))
-      ))
-      out.push(...results)
+    const cl = await getCluster()
+
+    // Queue all URLs into the cluster and collect results
+    const resultMap = new Map()
+    const queuePromises = normalized.map((url, i) => {
+      return cl.execute(async ({ page }) => {
+        console.log(`[API] Puppeteer checking ${i + 1}/${normalized.length}: ${url}`)
+        try {
+          const result = await checkWithPuppeteer(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects, page)
+          console.log(`[API] Puppeteer result for ${url}: ${result.category}`)
+          resultMap.set(i, result)
+        } catch (err) {
+          console.log(`[API] Puppeteer failed for ${url}: ${err.message}`)
+          resultMap.set(i, {
+            url,
+            httpStatus: 0,
+            category: 'down',
+            reason: `Puppeteer error: ${err.message}`,
+            redirectTo: null,
+            scrapedText: null,
+            screenshot: null,
+            isUniqueRedirect: false,
+            timeMs: 0
+          })
+        }
+      })
+    })
+
+    await Promise.all(queuePromises)
+    // Preserve original order
+    for (let i = 0; i < normalized.length; i++) {
+      out.push(resultMap.get(i))
     }
+
   } else if (tryAllVariations) {
     // Check all variations for each URL
     for (let i = 0; i < normalized.length; i += limit) {
@@ -1316,45 +1370,52 @@ app.get('/api/debug-puppeteer', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'Missing ?url= parameter' })
   if (!puppeteer) return res.status(503).json({ error: 'Puppeteer not available' })
 
-  let page = null
   try {
-    const browser = await getBrowser()
-    page = await browser.newPage()
-    await page.setViewport({ width: 1280, height: 800 })
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
+    const cl = await getCluster()
 
-    const allRequests = []
-    page.on('request', request => {
-      allRequests.push({ url: request.url(), type: request.resourceType(), isNav: request.isNavigationRequest() })
+    const result = await new Promise((resolve, reject) => {
+      cl.queue(async ({ page }) => {
+        try {
+          await page.setViewport({ width: 1280, height: 800 })
+          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
+
+          const allRequests = []
+          page.on('request', request => {
+            allRequests.push({ url: request.url(), type: request.resourceType(), isNav: request.isNavigationRequest() })
+          })
+
+          let navError = null
+          try {
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 })
+          } catch (e) {
+            navError = e.message
+            try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }) } catch (_) {}
+          }
+
+          await new Promise(r => setTimeout(r, 3000))
+          const finalUrl = page.url()
+          const html = await page.content().catch(() => '')
+
+          const navRequests = allRequests.filter(r => r.isNav)
+
+          resolve({
+            inputUrl: url,
+            finalUrl,
+            urlChanged: url !== finalUrl,
+            navError,
+            navigationRequests: navRequests,
+            totalRequests: allRequests.length,
+            htmlLength: html.length,
+            htmlFirst3000: html.slice(0, 3000)
+          })
+        } catch (err) {
+          reject(err)
+        }
+      })
     })
 
-    let navError = null
-    try {
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 })
-    } catch (e) {
-      navError = e.message
-      try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }) } catch (_) {}
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 3000))
-    const finalUrl = page.url()
-    const html = await page.content().catch(() => '')
-    await page.close()
-
-    const navRequests = allRequests.filter(r => r.isNav)
-
-    res.json({
-      inputUrl: url,
-      finalUrl,
-      urlChanged: url !== finalUrl,
-      navError,
-      navigationRequests: navRequests,
-      totalRequests: allRequests.length,
-      htmlLength: html.length,
-      htmlFirst3000: html.slice(0, 3000)
-    })
+    res.json(result)
   } catch (err) {
-    if (page) try { await page.close() } catch (_) {}
     res.status(500).json({ error: err.message })
   }
 })
