@@ -35,6 +35,7 @@ let screenshotData = {
   redirect_down: [],
   unique_redirect: [],
   cloudflare_block: [],
+  long_load: [],
   down: []
 }
 let currentGallery = { category: '', index: 0 }
@@ -114,6 +115,7 @@ const tbRedirectUp = el('#tbody-redirect_up')
 const tbRedirectDown = el('#tbody-redirect_down')
 const tbUniqueRedirect = el('#tbody-unique_redirect')
 const tbCf = el('#tbody-cloudflare_block')
+const tbLongLoad = el('#tbody-long_load')
 const tbDown = el('#tbody-down')
 const tableBoxes = Array.from(document.querySelectorAll('.table-box'))
 const copyBtns = Array.from(document.querySelectorAll('.copy-btn'))
@@ -124,10 +126,11 @@ const countEls = {
   redirect_down: document.getElementById('count-redirect_down'),
   unique_redirect: document.getElementById('count-unique_redirect'),
   cloudflare_block: document.getElementById('count-cloudflare_block'),
+  long_load: document.getElementById('count-long_load'),
   down: document.getElementById('count-down')
 }
 
-const state = { up: [], redirect_up: [], redirect_down: [], unique_redirect: [], cloudflare_block: [], down: [], redirect: [] }
+const state = { up: [], redirect_up: [], redirect_down: [], unique_redirect: [], cloudflare_block: [], long_load: [], down: [], redirect: [] }
 
 function toLines(text) {
   return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
@@ -173,6 +176,7 @@ function renderItem(r) {
     unique_redirect: 'badge badge-unique-redirect',
     redirect: 'badge badge-redirect-down',
     cloudflare_block: 'badge badge-cf',
+    long_load: 'badge badge-long-load',
     down: 'badge badge-down'
   }[r.category] || 'badge'
 
@@ -183,6 +187,7 @@ function renderItem(r) {
     unique_redirect: 'Unique Redirect',
     redirect: 'Redirect (Unknown)',
     cloudflare_block: 'Cloudflare',
+    long_load: 'Long Load',
     down: 'Down'
   }[r.category] || r.category.replace('_', ' ')
 
@@ -198,6 +203,7 @@ function renderItem(r) {
       redirect_down: 'mini-badge-redirect-down',
       unique_redirect: 'mini-badge-unique-redirect',
       cloudflare_block: 'mini-badge-cf',
+      long_load: 'mini-badge-long-load',
       down: 'mini-badge-down'
     }
 
@@ -250,7 +256,7 @@ function renderItem(r) {
         currentGallery.index = idx
         const categoryNames = {
           up: 'Up', redirect_up: 'Redirect Up', redirect_down: 'Redirect Down',
-          unique_redirect: 'Unique Redirect', cloudflare_block: 'Cloudflare', down: 'Down'
+          unique_redirect: 'Unique Redirect', cloudflare_block: 'Cloudflare', long_load: 'Long Load', down: 'Down'
         }
         screenshotModalTitle.textContent = `${categoryNames[cat] || cat} Screenshots`
         updateScreenshotDisplay()
@@ -371,7 +377,7 @@ async function check() {
   screenshotsByUrl = {} // Reset URL-keyed screenshots
 
   const isAdvancedMode = advancedRedirectsEl && advancedRedirectsEl.checked
-  const BATCH_SIZE = isAdvancedMode ? 20 : 5 // 20 concurrent for Puppeteer, 5 for normal
+  const BATCH_SIZE = isAdvancedMode ? 1 : 5 // 1 at a time for Puppeteer, 5 for normal
   const totalUrls = urls.length
   const allResults = []
   const progressText = el('#progress-text')
@@ -384,7 +390,11 @@ async function check() {
 
       // Update progress text
       if (progressText) {
-        progressText.textContent = `${isAdvancedMode ? 'Puppeteer checking' : 'Checking'} ${i + 1}-${endIndex} / ${totalUrls}...`
+        if (isAdvancedMode) {
+          progressText.textContent = `Puppeteer checking ${i + 1} / ${totalUrls}...`
+        } else {
+          progressText.textContent = `Checking ${i + 1}-${endIndex} / ${totalUrls}...`
+        }
       }
 
       const res = await fetch('/api/check', {
@@ -487,6 +497,7 @@ function renderTables() {
     tbUniqueRedirect.innerHTML = buildRows(state.unique_redirect, 'unique_redirect')
   }
   tbCf.innerHTML = buildRows(state.cloudflare_block, 'cloudflare_block')
+  tbLongLoad.innerHTML = buildRows(state.long_load, 'long_load')
   tbDown.innerHTML = buildRows(state.down, 'down')
 
   // Mark empty boxes so they are visually droppable
@@ -607,20 +618,22 @@ function renderChart() {
   const ctx = chartCanvas.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   const vals = [
-    state.up.length, 
-    state.redirect_up.length, 
+    state.up.length,
+    state.redirect_up.length,
     state.redirect_down.length,
     state.unique_redirect.length,
     state.cloudflare_block.length,
+    state.long_load.length,
     state.down.length
   ]
   const total = vals.reduce((a,b) => a+b, 0)
   const colors = [
-    getCssVar('--up'), 
-    getCssVar('--redirect-up'), 
+    getCssVar('--up'),
+    getCssVar('--redirect-up'),
     getCssVar('--redirect-down'),
     getCssVar('--unique-redirect'),
     getCssVar('--cf'),
+    getCssVar('--long-load'),
     getCssVar('--down')
   ]
   ctx.clearRect(0,0,size,size)
@@ -688,6 +701,7 @@ function openScreenshotGallery(category) {
     redirect_down: 'Redirect Down',
     unique_redirect: 'Unique Redirect',
     cloudflare_block: 'Cloudflare',
+    long_load: 'Long Load',
     down: 'Down'
   }
 

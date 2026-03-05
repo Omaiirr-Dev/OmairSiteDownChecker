@@ -9,6 +9,7 @@
   --unique-redirect: #d946ef;
   --cf: #8b5cf6;
   --geo: #ec4899;
+  --long-load: #eab308;
   --down: #ef4444;
   --border: #1c1c1c;
   --whiteish: #f4f4f4;
@@ -393,6 +394,7 @@ button:focus { outline: 2px solid #333 }
 .chip-redirect-down { background: color-mix(in srgb, var(--redirect-down) 18%, black); color: #ffedd5 }
 .chip-unique-redirect { background: color-mix(in srgb, var(--unique-redirect) 18%, black); color: #fae8ff }
 .chip-cf { background: color-mix(in srgb, var(--cf) 22%, black); color: #f3eaff }
+.chip-long-load { background: color-mix(in srgb, var(--long-load) 18%, black); color: #fef9c3 }
 .chip-down { background: color-mix(in srgb, var(--down) 18%, black); color: #ffecec }
 
 .results { list-style: none; margin: 0; padding: 0 }
@@ -554,6 +556,7 @@ button:focus { outline: 2px solid #333 }
 .badge-redirect-down { background: var(--redirect-down); color: #1b0f04 }
 .badge-unique-redirect { background: var(--unique-redirect); color: #1a051f }
 .badge-cf { background: var(--cf); color: #0f0a1b }
+.badge-long-load { background: var(--long-load); color: #1b1504 }
 .badge-down { background: var(--down); color: #1b0404 }
 
 .redirect-target { color: #ffdca8; overflow-wrap: anywhere; word-break: break-all; }
@@ -583,6 +586,7 @@ button:focus { outline: 2px solid #333 }
 .table-box.empty[data-category="redirect_down"]::after { border-color: color-mix(in srgb, var(--redirect-down) 70%, white); color: #ffedd5 }
 .table-box.empty[data-category="unique_redirect"]::after { border-color: color-mix(in srgb, var(--unique-redirect) 70%, white); color: #fae8ff }
 .table-box.empty[data-category="cloudflare_block"]::after { border-color: color-mix(in srgb, var(--cf) 75%, white); color: #f3eaff }
+.table-box.empty[data-category="long_load"]::after { border-color: color-mix(in srgb, var(--long-load) 70%, white); color: #fef9c3 }
 .table-box.empty[data-category="down"]::after { border-color: color-mix(in srgb, var(--down) 70%, white); color: #ffecec }
 
 .chart-card { margin-top: 16px; background: linear-gradient(180deg, var(--surface), #0c0c0d); border: 1px solid var(--border); border-radius: 16px; padding: 16px }
@@ -633,6 +637,7 @@ button:focus { outline: 2px solid #333 }
 .table-box[data-category="redirect_down"] .table-head { background: color-mix(in srgb, var(--redirect-down) 12%, #0c0c0d) }
 .table-box[data-category="unique_redirect"] .table-head { background: color-mix(in srgb, var(--unique-redirect) 12%, #0c0c0d) }
 .table-box[data-category="cloudflare_block"] .table-head { background: color-mix(in srgb, var(--cf) 14%, #0c0c0d) }
+.table-box[data-category="long_load"] .table-head { background: color-mix(in srgb, var(--long-load) 12%, #0c0c0d) }
 .table-box[data-category="down"] .table-head { background: color-mix(in srgb, var(--down) 12%, #0c0c0d) }
 
 .table-box[data-category="up"] .table td { border-left: 3px solid color-mix(in srgb, var(--up) 60%, black) }
@@ -640,6 +645,7 @@ button:focus { outline: 2px solid #333 }
 .table-box[data-category="redirect_down"] .table td { border-left: 3px solid color-mix(in srgb, var(--redirect-down) 60%, black) }
 .table-box[data-category="unique_redirect"] .table td { border-left: 3px solid color-mix(in srgb, var(--unique-redirect) 60%, black) }
 .table-box[data-category="cloudflare_block"] .table td { border-left: 3px solid color-mix(in srgb, var(--cf) 60%, black) }
+.table-box[data-category="long_load"] .table td { border-left: 3px solid color-mix(in srgb, var(--long-load) 60%, black) }
 .table-box[data-category="down"] .table td { border-left: 3px solid color-mix(in srgb, var(--down) 60%, black) }
 
 .table-box[data-category="up"] .table tr:hover { background: color-mix(in srgb, var(--up) 8%, #0c0c0d) }
@@ -647,6 +653,7 @@ button:focus { outline: 2px solid #333 }
 .table-box[data-category="redirect_down"] .table tr:hover { background: color-mix(in srgb, var(--redirect-down) 8%, #0c0c0d) }
 .table-box[data-category="unique_redirect"] .table tr:hover { background: color-mix(in srgb, var(--unique-redirect) 8%, #0c0c0d) }
 .table-box[data-category="cloudflare_block"] .table tr:hover { background: color-mix(in srgb, var(--cf) 10%, #0c0c0d) }
+.table-box[data-category="long_load"] .table tr:hover { background: color-mix(in srgb, var(--long-load) 8%, #0c0c0d) }
 .table-box[data-category="down"] .table tr:hover { background: color-mix(in srgb, var(--down) 8%, #0c0c0d) }
 
 /* Disabled checkbox label */

@@ -1299,36 +1299,58 @@ app.post('/api/check', async (req, res) => {
     const cl = await getCluster()
 
     // Queue all URLs into the cluster and collect results
-    const resultMap = new Map()
-    const queuePromises = normalized.map((url, i) => {
-      return cl.execute(async ({ page }) => {
-        console.log(`[API] Puppeteer checking ${i + 1}/${normalized.length}: ${url}`)
-        try {
-          const result = await checkWithPuppeteer(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects, page)
-          console.log(`[API] Puppeteer result for ${url}: ${result.category}`)
-          resultMap.set(i, result)
-        } catch (err) {
-          console.log(`[API] Puppeteer failed for ${url}: ${err.message}`)
-          resultMap.set(i, {
+    // Each cl.execute is wrapped in its own try/catch so one hung site can't crash the whole batch
+    // 20s timeout — if exceeded, site goes to "long_load" for manual review
+    const LONG_LOAD_TIMEOUT = 20000
+    const queuePromises = normalized.map(async (url, i) => {
+      const started = Date.now()
+      try {
+        const result = await Promise.race([
+          cl.execute(async ({ page }) => {
+            console.log(`[API] Puppeteer checking ${i + 1}/${normalized.length}: ${url}`)
+            return await checkWithPuppeteer(url, puppeteerScreenshot, scrapeText, allNormalized, detectUniqueRedirects, page)
+          }),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('LONG_LOAD_TIMEOUT')), LONG_LOAD_TIMEOUT)
+          )
+        ])
+        console.log(`[API] Puppeteer result for ${url}: ${result.category}`)
+        return result
+      } catch (err) {
+        const elapsed = Date.now() - started
+        if (err.message === 'LONG_LOAD_TIMEOUT' || elapsed >= LONG_LOAD_TIMEOUT) {
+          console.log(`[API] Long load time for ${url} (>${LONG_LOAD_TIMEOUT / 1000}s)`)
+          return {
             url,
             httpStatus: 0,
-            category: 'down',
-            reason: `Puppeteer error: ${err.message}`,
+            category: 'long_load',
+            reason: `Took longer than ${LONG_LOAD_TIMEOUT / 1000}s to load`,
             redirectTo: null,
             scrapedText: null,
             screenshot: null,
             isUniqueRedirect: false,
-            timeMs: 0
-          })
+            timeMs: elapsed
+          }
         }
-      })
+        console.log(`[API] Puppeteer failed for ${url}: ${err.message}`)
+        return {
+          url,
+          httpStatus: 0,
+          category: 'down',
+          reason: err.message.includes('Timeout') || err.message.includes('timeout')
+            ? 'Timeout (Puppeteer)'
+            : `Puppeteer error: ${err.message.substring(0, 100)}`,
+          redirectTo: null,
+          scrapedText: null,
+          screenshot: null,
+          isUniqueRedirect: false,
+          timeMs: elapsed
+        }
+      }
     })
 
-    await Promise.all(queuePromises)
-    // Preserve original order
-    for (let i = 0; i < normalized.length; i++) {
-      out.push(resultMap.get(i))
-    }
+    const results = await Promise.all(queuePromises)
+    out.push(...results)
 
   } else if (tryAllVariations) {
     // Check all variations for each URL
@@ -1373,45 +1395,39 @@ app.get('/api/debug-puppeteer', async (req, res) => {
   try {
     const cl = await getCluster()
 
-    const result = await new Promise((resolve, reject) => {
-      cl.queue(async ({ page }) => {
-        try {
-          await page.setViewport({ width: 1280, height: 800 })
-          await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
+    const result = await cl.execute(async ({ page }) => {
+      await page.setViewport({ width: 1280, height: 800 })
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36')
 
-          const allRequests = []
-          page.on('request', request => {
-            allRequests.push({ url: request.url(), type: request.resourceType(), isNav: request.isNavigationRequest() })
-          })
-
-          let navError = null
-          try {
-            await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 })
-          } catch (e) {
-            navError = e.message
-            try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }) } catch (_) {}
-          }
-
-          await new Promise(r => setTimeout(r, 3000))
-          const finalUrl = page.url()
-          const html = await page.content().catch(() => '')
-
-          const navRequests = allRequests.filter(r => r.isNav)
-
-          resolve({
-            inputUrl: url,
-            finalUrl,
-            urlChanged: url !== finalUrl,
-            navError,
-            navigationRequests: navRequests,
-            totalRequests: allRequests.length,
-            htmlLength: html.length,
-            htmlFirst3000: html.slice(0, 3000)
-          })
-        } catch (err) {
-          reject(err)
-        }
+      const allRequests = []
+      page.on('request', request => {
+        allRequests.push({ url: request.url(), type: request.resourceType(), isNav: request.isNavigationRequest() })
       })
+
+      let navError = null
+      try {
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 15000 })
+      } catch (e) {
+        navError = e.message
+        try { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 }) } catch (_) {}
+      }
+
+      await new Promise(r => setTimeout(r, 3000))
+      const finalUrl = page.url()
+      const html = await page.content().catch(() => '')
+
+      const navRequests = allRequests.filter(r => r.isNav)
+
+      return {
+        inputUrl: url,
+        finalUrl,
+        urlChanged: url !== finalUrl,
+        navError,
+        navigationRequests: navRequests,
+        totalRequests: allRequests.length,
+        htmlLength: html.length,
+        htmlFirst3000: html.slice(0, 3000)
+      }
     })
 
     res.json(result)

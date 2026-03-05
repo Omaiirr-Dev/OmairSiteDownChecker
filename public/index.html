@@ -71,6 +71,7 @@
           <span class="chip chip-redirect-down">Redirect Down</span>
           <span class="chip chip-unique-redirect">Unique Redirect</span>
           <span class="chip chip-cf">Cloudflare</span>
+          <span class="chip chip-long-load">Long Load</span>
           <span class="chip chip-down">Down</span>
           <span id="checked-count" class="count-green"></span>
           <span id="time-taken" class="time-taken"></span>
@@ -100,6 +101,10 @@
             <div class="table-head"><h2>Cloudflare</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="cloudflare_block" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="cloudflare_block">Copy List</button></div></div>
             <table class="table" id="table-cloudflare_block"><tbody id="tbody-cloudflare_block"></tbody></table>
           </div>
+          <div class="table-box" data-category="long_load">
+            <div class="table-head"><h2>Long Load Time</h2><div class="table-head-buttons"><button class="copy-btn" data-target="long_load">Copy List</button></div></div>
+            <table class="table" id="table-long_load"><tbody id="tbody-long_load"></tbody></table>
+          </div>
           <div class="table-box" data-category="down">
             <div class="table-head"><h2>Down</h2><div class="table-head-buttons"><button class="screenshot-btn" data-target="down" style="display:none;">View Screenshots</button><button class="copy-btn" data-target="down">Copy List</button></div></div>
             <table class="table" id="table-down"><tbody id="tbody-down"></tbody></table>
@@ -116,6 +121,7 @@
             <span class="chip chip-redirect-down">Redirect Down: <span id="count-redirect_down">0</span></span>
             <span class="chip chip-unique-redirect">Unique: <span id="count-unique_redirect">0</span></span>
             <span class="chip chip-cf">CF: <span id="count-cloudflare_block">0</span></span>
+            <span class="chip chip-long-load">Long Load: <span id="count-long_load">0</span></span>
             <span class="chip chip-down">Down: <span id="count-down">0</span></span>
           </div>
         </div>
@@ -180,6 +186,7 @@
                 <option value="redirect_down">Redirect Down</option>
                 <option value="unique_redirect">Unique Redirect</option>
                 <option value="cloudflare_block">Cloudflare</option>
+                <option value="long_load">Long Load</option>
                 <option value="down">Down</option>
               </select>
               <button id="screenshotSendBtn" class="screenshot-send-btn">Move</button>
